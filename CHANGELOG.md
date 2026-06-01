@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1] - 2026-06-01
+
+### Fixed
+- Project-root detectie in `sync.sh` herkent nu elke `vendor/dreejt/*`-package (voorheen alleen `mintis-sync`). Hierdoor faalde `mintis sync` met ".env not found" wanneer het pakket als `vendor/dreejt/mintis-dev` geïnstalleerd was.
+- Update-check breekt het script niet meer af onder `set -e` wanneer de GitHub-API onbereikbaar of rate-limited is (`|| true`); een lege uitkomst wordt netjes overgeslagen.
+
 ## [2.0.0] - 2026-06-01
 
 Package hernoemd van `dreejt/mintis-sync` → `dreejt/mintis-dev` en uitgebreid tot een algemene developer-CLI. De oude naam blijft werken via `replace`.
