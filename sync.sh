@@ -104,7 +104,8 @@ EOF
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Detect if running from inside vendor/ (Composer package)
-if [[ "$SCRIPT_DIR" == */vendor/dreejt/mintis-sync ]]; then
+# Matcht elke dreejt-package (mintis-sync, mintis-dev, ...): vendor/dreejt/<pkg> → ../../..
+if [[ "$SCRIPT_DIR" == */vendor/dreejt/* ]]; then
     PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 elif [[ "$SCRIPT_DIR" == */vendor/bin ]]; then
     PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -147,8 +148,10 @@ check_for_updates() {
     fi
 
     local latest
+    # `|| true`: voorkom dat een onbereikbare/rate-limited GitHub-API het script
+    # via `set -e` afbreekt. Lege uitkomst wordt hieronder netjes afgehandeld.
     latest=$(curl -sf --max-time 3 "https://api.github.com/repos/dreejt/mintis-sync/tags" 2>/dev/null \
-        | grep '"name"' | head -1 | sed 's/.*"name": "\(.*\)".*/\1/' | sed 's/^v//')
+        | grep '"name"' | head -1 | sed 's/.*"name": "\(.*\)".*/\1/' | sed 's/^v//') || true
 
     if [[ -z "$latest" ]]; then
         return  # GitHub unreachable, skip silently
