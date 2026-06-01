@@ -5,6 +5,6 @@
 
 <!-- Inhoud gesynchroniseerd met .github/copilot-instructions.md -->
 
-`dreejt/mintis-sync` is een Composer-pakket met een bash-script (`sync.sh`) voor het synchroniseren van Bedrock-based WordPress omgevingen (development ↔ staging ↔ production).
+`dreejt/mintis-dev` (voorheen `dreejt/mintis-sync`) is een Composer dev-package met één `mintis` CLI voor Bedrock/WordPress projecten: omgeving-sync, lokale dev-symlink toggle, git pre-commit guard en een debug-symlink mu-plugin.
 
 Zie [.github/copilot-instructions.md](.github/copilot-instructions.md) voor alle project-instructies, conventies en release-workflow.

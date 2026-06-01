@@ -1,21 +1,26 @@
-# AI-assistent instructies — dreejt/mintis-sync
+# AI-assistent instructies — dreejt/mintis-dev
 
 Dit bestand wordt automatisch gelezen door GitHub Copilot en andere AI-assistenten.
 
 ## Wat is dit project?
 
-`dreejt/mintis-sync` is een Composer-pakket met een bash-script (`sync.sh`) voor het synchroniseren van Bedrock-based WordPress omgevingen (development ↔ staging ↔ production). Het wordt geïnstalleerd als Composer-dependency in WordPress-projecten.
+`dreejt/mintis-dev` (voorheen `dreejt/mintis-sync`) is een Composer dev-package met één `mintis` CLI voor Bedrock/WordPress projecten: omgeving-sync, lokale dev-symlink toggle, een git pre-commit guard en een debug-symlink mu-plugin. Wordt geïnstalleerd als dev-dependency. De oude naam `dreejt/mintis-sync` blijft werken via `replace` in composer.json.
 
 ## Projectstructuur
 
 ```
-sync.sh              # Hoofd sync-script (bash)
-setup-wp-cli.php     # Genereert wp-cli.yml vanuit .env
-composer.json        # Composer pakket definitie (geen "version" veld — dat regelt de git tag)
-CHANGELOG.md         # Versiegeschiedenis — de bovenste versie bepaalt de release-tag
-.sync.example        # Voorbeeld config voor projecten die dit pakket gebruiken
-install.sh           # Installatie helper voor handmatige installatie
+mintis                   # CLI dispatcher (enige bin): sync / dev / prod / status / setup / guard
+sync.sh                  # Sync-script (bash) — aangeroepen door `mintis sync`
+setup-wp-cli.php         # Genereert wp-cli.yml vanuit .env — aangeroepen door `mintis setup`
+mintis-debug-symlink.php # mu-plugin (dev-only) — door `mintis setup` in mu-plugins gesymlinkt
+composer.json            # Pakketdefinitie (geen "version" veld — de git tag regelt dat); bin = ["mintis"]
+CHANGELOG.md             # Versiegeschiedenis — de bovenste versie bepaalt de release-tag
+.sync.example            # Voorbeeld config voor projecten die dit pakket gebruiken
+install.sh               # Installatie helper voor handmatige installatie
 ```
+
+De toggle-, guard-, hook-install- en debug-symlink-install-logica zit in de `mintis` dispatcher.
+Consumers configureren de te togglen packages via `extra.mintis-dev.packages` in hun eigen composer.json (zie README).
 
 ## Release workflow
 

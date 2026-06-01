@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0] - 2026-06-01
+
+Package hernoemd van `dreejt/mintis-sync` → `dreejt/mintis-dev` en uitgebreid tot een algemene developer-CLI. De oude naam blijft werken via `replace`.
+
+### Changed (breaking)
+- Alle losse bins zijn vervangen door één `mintis` dispatcher. Migreer aanroepen:
+  - `vendor/bin/sync.sh <a> <b>` → `mintis sync <a> <b>`
+  - `composer setup-wp-cli` / `setup-wp-cli.php` → `mintis setup`
+- `composer.json` `name` is nu `dreejt/mintis-dev`; werk `require` en de vcs-repository-URL bij (`mintis-dev.git`). Oude `dreejt/mintis-sync` requires blijven werken via `replace`.
+
+### Added
+- `mintis dev` / `mintis prod` / `mintis status`: schakelt de in `extra.mintis-dev.packages` geconfigureerde packages tussen een lokale path-symlink en de GitHub-repo. Ondersteunt `working-dir` (submap-packages zoals een thema, met absoluut symlink-pad) en `update-flags` (bijv. `--no-dev`). Laadt `.env` in vóór composer (voor o.a. `ACFE_PRO_KEY`) en bakt de `safe.bareRepository=all` git-workaround in bij `prod`.
+- `mintis guard`: pre-commit guard die commits van `composer.json`/`composer.lock` (root én submap-packages) blokkeert zolang dev-mode actief is (`.dev-mode`), zodat je geen path-symlink-repo naar productie pusht.
+- `mintis setup`: genereert `wp-cli.yml`, installeert de pre-commit guard-hook (idempotent, respecteert `core.hooksPath`, ververst een verouderd blok) en symlinkt de `mintis-debug-symlink` mu-plugin lokaal (dev-only).
+- `mintis-debug-symlink.php` is in dit package opgenomen (voorheen het losse `dreejt/mintis-debug-symlink` package).
+
 ## [1.9.0] - 2026-04-15
 
 ### Changed

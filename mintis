@@ -1,0 +1,316 @@
+#!/usr/bin/env php
+<?php
+/**
+ * mintis — Mintis developer CLI.
+ *
+ * Eén tool voor het Mintis-ecosysteem (Bedrock/WordPress). Wordt geïnstalleerd
+ * als Composer dev-dependency (dreejt/mintis-dev) en draait vanuit de project-root.
+ *
+ *   mintis dev            Schakel package(s) naar lokale path-symlink — live editen
+ *   mintis prod           Schakel terug naar de GitHub-repo (voor deploy/template)
+ *   mintis status         Toon de huidige modus per package
+ *   mintis sync <a> <b>   Sync database/uploads tussen omgevingen (zie sync.sh)
+ *   mintis setup          Genereer wp-cli.yml, installeer git-hooks + debug-symlink
+ *   mintis guard <hook>   Interne git-hook guard (aangeroepen door pre-commit)
+ *
+ * Configuratie (project-composer.json):
+ *   "extra": { "mintis-dev": { "packages": [ ... ] } }
+ * Zie README of de package-velden onderaan dit bestand.
+ */
+
+const MARKER = '.dev-mode';
+
+$PKG = __DIR__;          // package-dir (vendor/dreejt/mintis-dev)
+$ROOT = getcwd();        // project-root
+$cmd = $argv[1] ?? 'help';
+$rest = array_slice($argv, 2);
+
+switch ($cmd) {
+    case 'dev':    cmdDev($ROOT, requirePackages($ROOT)); break;
+    case 'prod':   cmdProd(requirePackages($ROOT)); break;
+    case 'status': cmdStatus($ROOT, requirePackages($ROOT)); break;
+    case 'sync':   cmdSync($PKG, $rest); break;
+    case 'setup':  cmdSetup($PKG, $ROOT); break;
+    case 'guard':  cmdGuard($ROOT); break;
+    case 'help': case '-h': case '--help': usage(); break;
+    default: err("Onbekend commando: $cmd"); usage(); exit(1);
+}
+
+// ─── Config ──────────────────────────────────────────────────
+
+function loadComposer(string $file): array
+{
+    if (!file_exists($file)) return [];
+    return json_decode(file_get_contents($file), true) ?: [];
+}
+
+function requirePackages(string $root): array
+{
+    $config = loadComposer($root . '/composer.json');
+    if (!$config) { err("Geen leesbare composer.json in $root"); exit(1); }
+    $packages = $config['extra']['mintis-dev']['packages'] ?? [];
+    if (!$packages) {
+        err("Geen 'extra.mintis-dev.packages' geconfigureerd in composer.json.");
+        info("Zie de README voor het configuratieformaat.");
+        exit(1);
+    }
+    foreach ($packages as $i => $pkg) {
+        foreach (['name', 'repository', 'path', 'vcs'] as $key) {
+            if (empty($pkg[$key])) { err("Package #$i mist verplicht veld '$key'."); exit(1); }
+        }
+    }
+    return $packages;
+}
+
+// ─── dev / prod / status ─────────────────────────────────────
+
+/**
+ * Laad .env in de omgeving zodat composer-plugins die getenv() gebruiken
+ * (bv. junaidbhura/composer-wp-pro-plugins → ACFE_PRO_KEY/ACFE_PRO_URL) werken
+ * tijdens `composer update`. No-op als er geen .env is.
+ */
+function loadEnv(string $root): void
+{
+    $file = $root . '/.env';
+    if (!file_exists($file)) return;
+    foreach (file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $line) {
+        $line = trim($line);
+        if ($line === '' || $line[0] === '#' || !str_contains($line, '=')) continue;
+        [$k, $v] = explode('=', $line, 2);
+        $k = trim($k);
+        $v = trim($v, " \t\"'");
+        if ($k !== '') putenv("$k=$v");
+    }
+}
+
+function cmdDev(string $root, array $packages): void
+{
+    loadEnv($root);
+    info("🔧 Schakel over naar lokale development (symlink)...");
+    foreach ($packages as $pkg) {
+        // Submap-packages (working-dir) krijgen een absoluut pad zodat de symlink
+        // óók vanuit een diepere map (thema) klopt; rest blijft relatief.
+        $url = $pkg['path'];
+        if (!empty($pkg['working-dir'])) {
+            $abs = realpath($root . '/' . $pkg['path']);
+            if ($abs === false) { err("Lokaal pad niet gevonden: {$pkg['path']}"); exit(1); }
+            $url = $abs;
+        }
+        $repo = json_encode(['type' => 'path', 'url' => $url, 'options' => ['symlink' => true]], JSON_UNESCAPED_SLASHES);
+        run("composer config repositories.{$pkg['repository']} " . escapeshellarg($repo) . " --no-interaction" . wd($pkg));
+        run("composer update " . escapeshellarg($pkg['name']) . updateFlags($pkg) . " --no-interaction" . wd($pkg));
+    }
+    touch(getcwd() . '/' . MARKER);
+    echo "\n";
+    ok("Package(s) draaien nu als lokale symlink — wijzigingen zijn direct actief.");
+}
+
+function cmdProd(array $packages): void
+{
+    info("🚀 Schakel terug naar GitHub repository...");
+    // Globale git safe.bareRepository=explicit breekt composer's vcs-cache;
+    // injecteer de instelling alleen voor deze aanroepen.
+    putenv('GIT_CONFIG_COUNT=1');
+    putenv('GIT_CONFIG_KEY_0=safe.bareRepository');
+    putenv('GIT_CONFIG_VALUE_0=all');
+    foreach ($packages as $pkg) {
+        $repo = json_encode(['type' => 'vcs', 'url' => $pkg['vcs'], 'no-api' => true], JSON_UNESCAPED_SLASHES);
+        run("composer config repositories.{$pkg['repository']} " . escapeshellarg($repo) . " --no-interaction" . wd($pkg));
+        if (!empty($pkg['install-dir'])) {
+            run("rm -rf " . escapeshellarg($pkg['install-dir']));
+        }
+        run("composer update " . escapeshellarg($pkg['name']) . updateFlags($pkg) . " --no-interaction" . wd($pkg));
+    }
+    @unlink(getcwd() . '/' . MARKER);
+    echo "\n";
+    ok("Package(s) worden nu van GitHub gehaald. Vergeet niet eerst je wijzigingen te pushen.");
+}
+
+function cmdStatus(string $root, array $packages): void
+{
+    info("Mintis dev-mode status:");
+    foreach ($packages as $pkg) {
+        $file = $root . '/' . (!empty($pkg['working-dir']) ? rtrim($pkg['working-dir'], '/') . '/' : '') . 'composer.json';
+        $types = [];
+        foreach ((loadComposer($file)['repositories'] ?? []) as $key => $repo) {
+            $name = $repo['name'] ?? (is_string($key) ? $key : null);
+            if ($name !== null) $types[$name] = $repo['type'] ?? '?';
+        }
+        $type = $types[$pkg['repository']] ?? '?';
+        $mode = $type === 'path' ? "\033[33mdev  (symlink → {$pkg['path']})\033[0m"
+              : ($type === 'vcs' ? "\033[32mprod (GitHub)\033[0m"
+              : "\033[31monbekend ($type)\033[0m");
+        printf("  %-40s %s\n", $pkg['name'], $mode);
+    }
+}
+
+function wd(array $pkg): string
+{
+    return !empty($pkg['working-dir']) ? " --working-dir=" . escapeshellarg($pkg['working-dir']) : '';
+}
+
+function updateFlags(array $pkg): string
+{
+    $flags = $pkg['update-flags'] ?? [];
+    return $flags ? ' ' . implode(' ', array_map('escapeshellarg', $flags)) : '';
+}
+
+// ─── sync ────────────────────────────────────────────────────
+
+function cmdSync(string $pkg, array $args): void
+{
+    $bin = $pkg . '/sync.sh';
+    if (!file_exists($bin)) { err("sync.sh niet gevonden in $pkg"); exit(1); }
+    $argStr = implode(' ', array_map('escapeshellarg', $args));
+    passthru(escapeshellarg($bin) . ($argStr ? " $argStr" : ''), $code);
+    exit($code);
+}
+
+// ─── setup ───────────────────────────────────────────────────
+
+function cmdSetup(string $pkg, string $root): void
+{
+    info("⚙️  Mintis project setup...");
+
+    // 1. wp-cli.yml uit .env
+    if (file_exists($pkg . '/setup-wp-cli.php')) {
+        echo "→ wp-cli.yml\n";
+        passthru('php ' . escapeshellarg($pkg . '/setup-wp-cli.php'));
+    }
+
+    // 2. pre-commit guard installeren
+    echo "→ git pre-commit hook\n";
+    installHook($root);
+
+    // 3. debug-symlink mu-plugin (dev-only) lokaal symlinken
+    echo "→ debug-symlink mu-plugin\n";
+    installDebugSymlink($pkg, $root);
+
+    echo "\n";
+    ok("Setup voltooid.");
+}
+
+function installHook(string $root): void
+{
+    if (!file_exists($root . '/.git')) { echo "  ℹ️  geen git-repo — hook overgeslagen\n"; return; }
+
+    $hooksPath = trim((string) shell_exec('git config core.hooksPath 2>/dev/null'));
+    if ($hooksPath === '') $hooksPath = '.git/hooks';
+    $hookDir = (str_starts_with($hooksPath, '/') ? '' : $root . '/') . $hooksPath;
+    if (!is_dir($hookDir)) @mkdir($hookDir, 0755, true);
+
+    $hookFile = rtrim($hookDir, '/') . '/pre-commit';
+    $begin = '# >>> mintis-guard >>>';
+    $end   = '# <<< mintis-guard <<<';
+    $block = "$begin\n# Mintis dev-mode guard — beheerd door dreejt/mintis-dev. Niet handmatig wijzigen.\n"
+           . "if [ -x vendor/bin/mintis ]; then\n  vendor/bin/mintis guard pre-commit || exit 1\nfi\n$end";
+
+    if (!file_exists($hookFile)) {
+        file_put_contents($hookFile, "#!/bin/sh\n$block\n");
+        chmod($hookFile, 0755);
+        echo "  ✓ pre-commit hook geïnstalleerd\n";
+        return;
+    }
+    $existing = file_get_contents($hookFile);
+    // Bestaand Mintis-blok? Ververs het tussen de markers (houdt het commando actueel).
+    if (str_contains($existing, $begin) && str_contains($existing, $end)) {
+        $pattern = '/' . preg_quote($begin, '/') . '.*?' . preg_quote($end, '/') . '/s';
+        $updated = preg_replace($pattern, $block, $existing);
+        if ($updated !== $existing) {
+            file_put_contents($hookFile, $updated);
+            echo "  ✓ pre-commit hook bijgewerkt\n";
+        } else {
+            echo "  ✓ pre-commit hook al actueel\n";
+        }
+        chmod($hookFile, 0755);
+        return;
+    }
+    // Bestaande niet-Mintis hook: vul aan zonder te overschrijven.
+    file_put_contents($hookFile, rtrim($existing, "\n") . "\n\n$block\n");
+    chmod($hookFile, 0755);
+    echo "  ✓ Mintis-guard toegevoegd aan bestaande pre-commit hook\n";
+}
+
+function installDebugSymlink(string $pkg, string $root): void
+{
+    $src = $pkg . '/mintis-debug-symlink.php';
+    $muDir = $root . '/web/app/mu-plugins';
+    if (!file_exists($src)) { echo "  ℹ️  debug-symlink.php niet in package — overgeslagen\n"; return; }
+    if (!is_dir($muDir)) { echo "  ℹ️  geen web/app/mu-plugins — overgeslagen\n"; return; }
+
+    $link = $muDir . '/mintis-debug-symlink.php';
+    if (is_link($link)) { echo "  ✓ debug-symlink al gelinkt\n"; return; }
+    if (file_exists($link)) { echo "  ⚠ {$link} bestaat al (geen symlink) — overgeslagen\n"; return; }
+    if (@symlink($src, $link)) echo "  ✓ debug-symlink mu-plugin gelinkt (dev-only)\n";
+    else echo "  ⚠ kon debug-symlink niet linken\n";
+}
+
+// ─── guard (git pre-commit) ──────────────────────────────────
+
+function cmdGuard(string $root): void
+{
+    // Geen dev-mode actief → niets te bewaken.
+    if (!file_exists($root . '/' . MARKER)) exit(0);
+
+    // Verzamel beschermde bestanden: root composer.json/lock + die van submap-packages.
+    $protected = ['composer.json', 'composer.lock'];
+    foreach (($GLOBALS['__pkgs'] ??= packagesQuiet($root)) as $pkg) {
+        if (!empty($pkg['working-dir'])) {
+            $wd = rtrim($pkg['working-dir'], '/');
+            $protected[] = "$wd/composer.json";
+            $protected[] = "$wd/composer.lock";
+        }
+    }
+
+    $staged = [];
+    $out = shell_exec('git diff --cached --name-only --diff-filter=d 2>/dev/null');
+    if (is_string($out)) $staged = array_filter(array_map('trim', explode("\n", $out)));
+
+    $risky = array_values(array_intersect($staged, $protected));
+    if (!$risky) exit(0);
+
+    $R = "\033[0;31m"; $Y = "\033[0;33m"; $N = "\033[0m";
+    fwrite(STDERR, "\n{$R}❌ Commit geblokkeerd: dev-mode is actief (lokale symlink).{$N}\n");
+    fwrite(STDERR, "   Je staat op het punt deze bestanden te committen:\n");
+    foreach ($risky as $f) fwrite(STDERR, "     - {$f}\n");
+    fwrite(STDERR, "   In dev-mode wijst de repository naar een lokaal path → de deploy zou breken.\n");
+    fwrite(STDERR, "   Draai eerst: {$Y}composer prod{$N} (of {$Y}mintis prod{$N}) en commit daarna opnieuw.\n");
+    fwrite(STDERR, "   Noodgeval: {$Y}git commit --no-verify{$N}\n\n");
+    exit(1);
+}
+
+/** Pakketten lezen zonder te exiten (voor guard — ontbrekende config = geen submappen). */
+function packagesQuiet(string $root): array
+{
+    return loadComposer($root . '/composer.json')['extra']['mintis-dev']['packages'] ?? [];
+}
+
+// ─── helpers ─────────────────────────────────────────────────
+
+function run(string $command): void
+{
+    echo "  \033[2m$command\033[0m\n";
+    passthru($command, $code);
+    if ($code !== 0) { err("Commando mislukt (exit $code): $command"); exit($code); }
+}
+
+function usage(): void
+{
+    echo <<<TXT
+mintis — Mintis developer CLI (dreejt/mintis-dev)
+
+USAGE
+  mintis dev              Schakel package(s) naar lokale path-symlink (live editen)
+  mintis prod             Schakel terug naar de GitHub-repo
+  mintis status           Toon huidige modus per package
+  mintis sync <from> <to> Sync database/uploads tussen omgevingen
+  mintis setup            wp-cli.yml + git-hooks + debug-symlink installeren
+
+Configuratie: extra.mintis-dev.packages in je project-composer.json (zie README).
+
+TXT;
+}
+
+function ok(string $m): void   { echo "\033[32m✅ $m\033[0m\n"; }
+function info(string $m): void { echo "\033[34m$m\033[0m\n"; }
+function err(string $m): void  { fwrite(STDERR, "\033[31m✗ $m\033[0m\n"); }
