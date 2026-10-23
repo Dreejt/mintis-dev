@@ -4,7 +4,7 @@ Developer-CLI voor Bedrock/WordPress projecten in het Mintis-ecosysteem. Eén `m
 
 - **`mintis sync`** — database & uploads synchroniseren tussen development, staging en production (WP-CLI + rsync)
 - **`mintis dev` / `prod` / `status`** — Mintis-packages tussen een lokale symlink en de GitHub-repo schakelen
-- **`mintis setup`** — `wp-cli.yml` genereren, pre-commit guard installeren en de debug-symlink mu-plugin lokaal plaatsen
+- **`mintis setup`** — WP-CLI-aliassen genereren (`wp-cli.local.yml`), pre-commit guard installeren en de debug-symlink mu-plugin lokaal plaatsen
 - **`mintis guard`** — pre-commit guard die voorkomt dat je een lokale dev-symlink naar productie commit
 
 > Zit standaard ingebakken in [mintis-26](https://github.com/Dreejt/mintis-26) projecten.
@@ -29,7 +29,7 @@ STAGING_DOMAIN='staging.jouwsite.nl'
 DEV_DOMAIN='jouwsite.test'
 ```
 
-**3. Setup** (genereert `wp-cli.yml`, installeert git-hook + debug-symlink)
+**3. Setup** (genereert `wp-cli.local.yml`, installeert git-hook + debug-symlink)
 ```bash
 vendor/bin/mintis setup
 ```
@@ -139,8 +139,10 @@ mintis sync production development --command-only   # Toon commando's, doe niets
 
 > Als composer-script aliased (mintis-26): `composer sync production development -- --dry-run`.
 
-### `wp-cli.yml`
-Wordt door `mintis setup` gegenereerd uit `.env`. Commit dit bestand in git zodat het op alle machines beschikbaar is.
+### `wp-cli.yml` en `wp-cli.local.yml`
+- **`wp-cli.yml`** — getrackt in git, **zonder** serverhosts: `path: web/wp` (de deploy op de server heeft het nodig) en `@development`. Wordt alleen aangemaakt als hij ontbreekt en nooit herschreven.
+- **`wp-cli.local.yml`** — per developer, **nooit committen**. `mintis setup` (en `composer install` via `setup-wp-cli`) schrijft hier `@staging`/`@production` met `SERVER_USER@SERVER_IP` uit `.env`. WP-CLI leest dit bestand vóór `wp-cli.yml` en erft die via `_: inherit: wp-cli.yml`. Staat hij nog niet in `.gitignore`, dan zet het script hem in `.git/info/exclude`.
+- Is `SERVER_IP` (of een ander serverveld) leeg, dan worden er geen aliassen geschreven in plaats van een kapotte `ploi@`.
 
 ### Plugin management (optioneel)
 Maak een `.sync` bestand (op basis van `.sync.example`) om per omgeving plugins aan/uit te schakelen na een sync:

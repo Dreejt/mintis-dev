@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-10-23
+
+### Changed
+- **WP-CLI-aliassen naar `wp-cli.local.yml`, `wp-cli.yml` wordt niet meer herschreven.** `setup-wp-cli.php` (draait bij elke `composer install` en via `mintis setup`) schreef `@staging`/`@production` met `SERVER_USER@SERVER_IP` in de getrackte `wp-cli.yml`. Elke install liet zo serverhosts (of bij een lege `SERVER_IP` een kapotte `ploi@`) achter in een bestand dat makkelijk mee gecommit wordt. Nu gaan de aliassen naar `wp-cli.local.yml` (`_: inherit: wp-cli.yml`), dat WP-CLI vóór `wp-cli.yml` leest. `wp-cli.yml` wordt alleen aangemaakt als hij ontbreekt (base: `path: web/wp`, `@development`, geen hosts). Bestaande projecten: hun getrackte `wp-cli.yml` blijft ongemoeid, de lokale aliassen winnen. Staat `wp-cli.local.yml` nog niet in `.gitignore`, dan gaat hij in `.git/info/exclude`. Op servers draait het script niet (`--no-dev`).
+- Bij een lege of ontbrekende `SERVER_USER`/`SERVER_IP`/`SERVER_BASE_PATH`/`PROD_DOMAIN`/`STAGING_DOMAIN`: waarschuwing en geen aliassen, in plaats van `exit 1` of een alias met lege host.
+- `sync.sh`: de lege-host-check kijkt naar `wp-cli.local.yml` als die bestaat, anders naar `wp-cli.yml`.
+
 ## [2.0.1] - 2026-06-01
 
 ### Fixed

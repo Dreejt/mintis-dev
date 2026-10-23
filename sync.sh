@@ -210,14 +210,17 @@ validate_requirements() {
         fi
     done
     
-    # Check if wp-cli.yml exists
-    if [ ! -f "$PROJECT_ROOT/wp-cli.yml" ]; then
-        warning "wp-cli.yml not found at $PROJECT_ROOT/wp-cli.yml"
-        info "Run setup-wp-cli.php to generate it from .env"
+    # WP-CLI reads wp-cli.local.yml (per-developer aliases, gitignored) before
+    # wp-cli.yml; check whichever one it will actually use.
+    local wpcli_config="$PROJECT_ROOT/wp-cli.local.yml"
+    [ -f "$wpcli_config" ] || wpcli_config="$PROJECT_ROOT/wp-cli.yml"
+    if [ ! -f "$wpcli_config" ]; then
+        warning "wp-cli.local.yml / wp-cli.yml not found in $PROJECT_ROOT"
+        info "Run 'composer run-script setup-wp-cli' to generate the aliases from .env"
     else
         # Detect incomplete ssh: lines (e.g. "ssh: ploi@" with empty host)
-        if grep -qE '^\s*ssh:\s*[^[:space:]]*@\s*$' "$PROJECT_ROOT/wp-cli.yml"; then
-            error "wp-cli.yml has an ssh: entry with an empty host"
+        if grep -qE '^\s*ssh:\s*[^[:space:]]*@\s*$' "$wpcli_config"; then
+            error "$(basename "$wpcli_config") has an ssh: entry with an empty host"
             info "Likely SERVER_IP is missing in .env. Regenerate with: composer run-script setup-wp-cli"
             has_errors=true
         fi
