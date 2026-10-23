@@ -249,6 +249,20 @@ function installDebugSymlink(string $pkg, string $root): void
 
 function cmdGuard(string $root): void
 {
+    // Server hosts belong in wp-cli.local.yml (gitignored), never in the tracked
+    // wp-cli.yml. Checks the staged version, not the working copy.
+    $stagedWpCli = shell_exec('git diff --cached --name-only --diff-filter=d -- wp-cli.yml 2>/dev/null');
+    if (is_string($stagedWpCli) && trim($stagedWpCli) !== '') {
+        $content = (string) shell_exec('git show :wp-cli.yml 2>/dev/null');
+        if (preg_match('/^\s*ssh:\s*\S+@\S+/m', $content)) {
+            $R = "\033[0;31m"; $Y = "\033[0;33m"; $N = "\033[0m";
+            fwrite(STDERR, "\n{$R}❌ Commit geblokkeerd: wp-cli.yml bevat een serverhost (ssh: user@host).{$N}\n");
+            fwrite(STDERR, "   SSH-aliassen horen in {$Y}wp-cli.local.yml{$N} (gitignored, gegenereerd uit .env).\n");
+            fwrite(STDERR, "   Herstel: {$Y}git restore --staged wp-cli.yml{$N} en draai {$Y}composer run-script setup-wp-cli{$N}.\n\n");
+            exit(1);
+        }
+    }
+
     // Geen dev-mode actief → niets te bewaken.
     if (!file_exists($root . '/' . MARKER)) exit(0);
 

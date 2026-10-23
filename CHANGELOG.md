@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.0] - 2026-10-23
+
+### Added
+- **`mintis guard pre-commit` blokkeert serverhosts in `wp-cli.yml`.** Staat er in de gestagede `wp-cli.yml` een `ssh: user@host`, dan stopt de commit met de verwijzing naar `wp-cli.local.yml`. Werkt ook buiten dev-mode en ook in GitHub Desktop (die draait git-hooks). Projecten krijgen de check via de hook die `mintis setup` installeert.
+
 ## [2.1.0] - 2026-10-23
 
 ### Changed
