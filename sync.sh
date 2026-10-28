@@ -394,10 +394,17 @@ sync_database() {
     fi
     success "Database imported (sanity check: $_table_count options-tabel(len) gevonden)"
 
-    # Search-replace URLs
+    # Search-replace URLs, voor http:// én https:// van het brondomein: een
+    # database kan beide bevatten (eerder gesyncte content naast content die de
+    # editor met het schema van WP_HOME opsloeg). Het schema van de bestemming
+    # eerst, zodat de tweede ronde nooit net vervangen URL's opnieuw raakt.
     # --url=$FROMSITE: WP-CLI weet dat de DB nog dev-URLs heeft na import
     # --skip-plugins --skip-themes: voorkomt dat plugin/theme-code de bootstrap breekt
-    wp_to_cmd search-replace "$FROMSITE" "$TOSITE" --all-tables-with-prefix --url="$FROMSITE" --skip-plugins --skip-themes
+    local _from_host="${FROMSITE#*://}" _first_scheme="${TOSITE%%://*}" _second_scheme
+    [[ "$_first_scheme" == "https" ]] && _second_scheme="http" || _second_scheme="https"
+    for _scheme in "$_first_scheme" "$_second_scheme"; do
+        wp_to_cmd search-replace "${_scheme}://${_from_host}" "$TOSITE" --all-tables-with-prefix --url="$FROMSITE" --skip-plugins --skip-themes
+    done
     success "Search-replace completed"
 
     # Fix multisite domains in wp_blogs and wp_site tables (alleen bij multisite)
@@ -431,7 +438,11 @@ sync_database() {
 UPLOADS_PATH="/web/app/uploads"
 
 # Environment URLs
-DEVSITE="http://${DEV_DOMAIN}"
+# Lokaal volgt het schema van WP_HOME uit .env (Herd/Valet met `secure` draait op https)
+DEVSITE="https://${DEV_DOMAIN}"
+if [[ "${WP_HOME:-}" == "http://${DEV_DOMAIN}"* ]]; then
+    DEVSITE="http://${DEV_DOMAIN}"
+fi
 STAGSITE="https://${STAGING_DOMAIN}"
 PRODSITE="https://${PROD_DOMAIN}"
 
@@ -540,7 +551,8 @@ if [[ "$COMMAND_ONLY" == true ]]; then
     echo "    wp @${TO} db export --default-character-set=utf8mb4 - > backups/${TO}-\$(date +%Y%m%d-%H%M%S).sql"
     echo "    wp @${TO} db reset --yes"
     echo "    wp @${FROM} db export --default-character-set=utf8mb4 - | wp @${TO} db import -"
-    echo "    wp @${TO} search-replace \"${FROMSITE}\" \"${TOSITE}\" --all-tables-with-prefix --url=\"${FROMSITE}\" --skip-plugins --skip-themes"
+    echo "    wp @${TO} search-replace \"https://${FROMSITE#*://}\" \"${TOSITE}\" --all-tables-with-prefix --url=\"${FROMSITE}\" --skip-plugins --skip-themes"
+    echo "    wp @${TO} search-replace \"http://${FROMSITE#*://}\" \"${TOSITE}\" --all-tables-with-prefix --url=\"${FROMSITE}\" --skip-plugins --skip-themes"
     echo "    wp @${TO} cache flush --url=\"${TOSITE}\" --skip-plugins --skip-themes"
     echo "    wp @${TO} maintenance-mode deactivate --skip-plugins --skip-themes"
     echo

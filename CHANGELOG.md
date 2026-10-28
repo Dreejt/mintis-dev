@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.1] - 2026-10-28
+
+### Fixed
+- **Search-replace mist geen `https://`-URL's van de lokale site meer.** `DEVSITE` stond vast op `http://${DEV_DOMAIN}`, terwijl lokale sites (Herd/Valet met `secure`) op https draaien. Bij een sync van development naar staging of productie bleven alle `https://<dev-domein>`-URL's staan: foto's, links en logo's wezen daarna naar de lokale machine. `DEVSITE` volgt nu het schema van `WP_HOME` uit `.env` (standaard https), en de search-replace vervangt zowel `http://` als `https://` van het brondomein naar de bestemming. Een database met beide varianten (eerder gesyncte content naast nieuwe) komt zo in één sync goed.
+
 ## [2.2.0] - 2026-10-23
 
 ### Added
