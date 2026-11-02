@@ -245,6 +245,26 @@ export WP_CLI_SSH_ARGS="-o ConnectTimeout=15 -o BatchMode=yes"
 # E_ERROR (1) | E_PARSE (4) | E_CORE_ERROR (16) | E_COMPILE_ERROR (64) = 85
 export WP_CLI_PHP_ARGS="-d display_errors=0 -d error_reporting=85"
 
+# WP_CLI_PHP_ARGS werkt alleen via de bash-launcher van WP-CLI (Composer
+# vendor/bin/wp). Een phar (Homebrew, wp-cli.phar) start via `#!/usr/bin/env php`
+# en negeert de variabele; zo kwam op PHP 8.5 een Deprecated-melding van WP-CLI
+# zelf in de dump. Start een phar daarom zelf met dezelfde PHP-flags.
+_WP_BIN=$(command -v wp || true)
+if [[ -n "$_WP_BIN" ]] && head -n 1 "$_WP_BIN" 2>/dev/null | grep -q '^#!.*php'; then
+    # shellcheck disable=SC2086 # WP_CLI_PHP_ARGS bevat bewust meerdere flags
+    wp() { php $WP_CLI_PHP_ARGS "$_WP_BIN" "$@"; }
+fi
+
+# Is dit een complete SQL-dump? De eerste regel moet de mysqldump/mariadb-dump-
+# header zijn (of de sandbox-regel van nieuwere MariaDB), de laatste regels
+# "-- Dump completed". Vangt PHP-meldingen in de stream en afgebroken exports af.
+sql_dump_is_valid() {
+    local file="$1"
+    [[ -s "$file" ]] || return 1
+    head -n 1 "$file" | grep -qE '^(-- (MySQL|MariaDB) dump|/\*M!999999)' || return 1
+    tail -n 5 "$file" | grep -q '^-- Dump completed' || return 1
+}
+
 # WP-CLI command helpers (handle local vs remote transparently)
 wp_from_cmd() {
     if [[ "$LOCAL" = true && "$FROM" == "development" ]]; then
@@ -320,6 +340,42 @@ manage_plugins() {
     done
 }
 
+# Zet de doeldatabase terug naar de backup van vóór de sync. De remote backup
+# heeft voorrang: die staat al op de server en hoeft niet over SSH gestreamd.
+# Lukt het herstel, dan gaat maintenance mode uit (de site is weer zoals hij
+# was). Lukt het niet, dan blijft maintenance mode aan en volgen de commando's.
+restore_target_database() {
+    local backup_file="$1" remote_backup_file="$2"
+    local _prefix="wp"
+    [[ "$TO" != "development" || "$LOCAL" != true ]] && _prefix="wp @$TO"
+    local _manual _ok=true
+
+    warning "$TO terugzetten naar de backup van vóór de sync..."
+    if [[ -n "$remote_backup_file" ]]; then
+        _manual="$_prefix db reset --yes && $_prefix db import \"$remote_backup_file\""
+        { wp_to_cmd db reset --yes && wp_to_cmd db import "$remote_backup_file"; } || _ok=false
+    elif [[ -s "$backup_file" ]]; then
+        _manual="$_prefix db reset --yes && $_prefix db import - < \"$backup_file\""
+        { wp_to_cmd db reset --yes && wp_to_cmd db import - < "$backup_file"; } || _ok=false
+    else
+        warning "$TO was vóór de sync leeg — niets terug te zetten"
+        return 0
+    fi
+
+    if [[ "$_ok" == true ]]; then
+        success "$TO teruggezet naar de toestand van vóór de sync"
+        if [[ "$_MAINT_ACTIVE" == true ]]; then
+            deactivate_maintenance_mode
+            _MAINT_ACTIVE=false
+        fi
+    else
+        _KEEP_MAINT=true
+        error "Terugzetten van $TO mislukt — maintenance mode blijft aan"
+        info "Handmatig herstellen: $_manual"
+        info "Daarna: $_prefix maintenance-mode deactivate"
+    fi
+}
+
 # Database sync with backup, import, search-replace, and multisite fix
 sync_database() {
     # Create timestamped backup of target database
@@ -330,11 +386,16 @@ sync_database() {
     mkdir -p "$backup_dir"
     info "Lokale backup maken van ${TO}-database..."
     if wp_to_cmd db export --default-character-set=utf8mb4 - > "$backup_file" 2>/dev/null; then
-        if [ -s "$backup_file" ]; then
-            success "Lokale backup opgeslagen: $backup_file ($(du -h "$backup_file" | cut -f1))"
-        else
+        if [ ! -s "$backup_file" ]; then
             rm -f "$backup_file"
             warning "${TO}-database is leeg — geen backup nodig"
+        elif sql_dump_is_valid "$backup_file"; then
+            success "Lokale backup opgeslagen: $backup_file ($(du -h "$backup_file" | cut -f1))"
+        else
+            error "Lokale backup van ${TO}-database is geen geldige SQL-dump — sync afgebroken, ${TO} is niet aangeraakt"
+            info "Begin van het bestand: $(head -c 200 "$backup_file" | tr '\n' ' ')"
+            info "Bestand bewaard voor inspectie: $backup_file"
+            exit 1
         fi
     else
         rm -f "$backup_file"
@@ -361,37 +422,47 @@ sync_database() {
         fi
     fi
 
-    # Reset target and import source database via pipe.
-    # WP_CLI_PHP_ARGS hierboven voorkomt dat PHP-warnings de SQL-stream
-    # contamineren. Stderr van beide kanten gaat naar stderr (zichtbaar voor
-    # de gebruiker), niet naar stdout (= de SQL-pijp).
-    info "Syncing database..."
-    wp_to_cmd db reset --yes
-    set +e
-    wp_from_cmd db export --default-character-set=utf8mb4 - | wp_to_cmd db import -
-    local _pipe_status=("${PIPESTATUS[@]}")
-    set -e
-    # Bepaal het juiste herstel-commando (lokaal of via @alias)
-    local _restore_prefix="wp"
-    [[ "$TO" != "development" || "$LOCAL" != true ]] && _restore_prefix="wp @$TO"
-    if [[ ${_pipe_status[0]} -ne 0 || ${_pipe_status[1]} -ne 0 ]]; then
-        error "Database sync mislukt (export exit=${_pipe_status[0]}, import exit=${_pipe_status[1]})"
-        info "Backup van $TO vóór sync: $backup_file"
-        info "Herstellen: $_restore_prefix db reset --yes && $_restore_prefix db import \"$backup_file\""
-        info "Tip: update WP-CLI ('brew upgrade wp-cli' of 'wp cli update') als je hier vaker last van hebt"
+    # Exporteer de bron eerst naar een bestand en controleer dat. Pas daarna
+    # wordt het doel gereset: een kapotte export (PHP-melding in de stream,
+    # afgebroken verbinding) laat het doel zo ongemoeid in plaats van leeg.
+    local export_file="$backup_dir/${FROM}-export-${timestamp}.sql"
+    info "Database exporteren van ${FROM}..."
+    if ! wp_from_cmd db export --default-character-set=utf8mb4 - > "$export_file"; then
+        error "Export van ${FROM} mislukt — sync afgebroken, ${TO} is niet aangeraakt"
+        rm -f "$export_file"
         exit 1
+    fi
+    if ! sql_dump_is_valid "$export_file"; then
+        error "Export van ${FROM} is geen geldige SQL-dump — sync afgebroken, ${TO} is niet aangeraakt"
+        info "Begin van het bestand: $(head -c 200 "$export_file" | tr '\n' ' ')"
+        info "Bestand bewaard voor inspectie: $export_file"
+        exit 1
+    fi
+    success "Export gecontroleerd ($(du -h "$export_file" | cut -f1))"
+
+    info "Syncing database..."
+    local _import_ok=true
+    wp_to_cmd db reset --yes || _import_ok=false
+    if [[ "$_import_ok" == true ]]; then
+        wp_to_cmd db import - < "$export_file" || _import_ok=false
     fi
 
     # Post-import sanity check: zijn er WordPress-tabellen?
-    # (de pipe kan slagen terwijl de daadwerkelijke data corrupt of incompleet is)
-    local _table_count
-    _table_count=$(wp_to_cmd db query "SHOW TABLES LIKE '%options';" --skip-column-names 2>/dev/null | wc -l | tr -d ' ')
-    if [[ "$_table_count" -lt 1 ]]; then
-        error "Sync leek te slagen maar er zijn geen options-tabellen in $TO!"
-        info "Backup beschikbaar: $backup_file"
-        info "Herstellen: $_restore_prefix db reset --yes && $_restore_prefix db import \"$backup_file\""
+    # (de import kan slagen terwijl de daadwerkelijke data corrupt of incompleet is)
+    local _table_count=0
+    if [[ "$_import_ok" == true ]]; then
+        _table_count=$(wp_to_cmd db query "SHOW TABLES LIKE '%options';" --skip-column-names 2>/dev/null | wc -l | tr -d ' ')
+    fi
+    if [[ "$_import_ok" != true || "$_table_count" -lt 1 ]]; then
+        if [[ "$_import_ok" == true ]]; then
+            error "Import leek te slagen maar er zijn geen options-tabellen in $TO"
+        else
+            error "Database-import in $TO mislukt"
+        fi
+        restore_target_database "$backup_file" "${remote_backup_file:-}"
         exit 1
     fi
+    rm -f "$export_file"
     success "Database imported (sanity check: $_table_count options-tabel(len) gevonden)"
 
     # Search-replace URLs, voor http:// én https:// van het brondomein: een
@@ -692,12 +763,24 @@ if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
     error "Sync werd onderbroken!"
     [[ "$_DB_DONE" == false && "$SKIP_DB" == false ]] && warning "Database is mogelijk niet volledig gesynchroniseerd"
     [[ "$_ASSETS_DONE" == false && "$SKIP_ASSETS" == false ]] && warning "Assets (uploads) zijn NIET gesynchroniseerd — voer opnieuw uit met: composer sync $FROM $TO -- --skip-db"
-    if [[ "$_MAINT_ACTIVE" == true ]]; then
+    if [[ "$_MAINT_ACTIVE" == true && "$_KEEP_MAINT" != true ]]; then
       warning "Maintenance mode deactiveren na fout..."
       wp_to_cmd maintenance-mode deactivate --skip-plugins --skip-themes 2>/dev/null || true
+      _MAINT_ACTIVE=false
     fi
     echo
   ' ERR
+
+  # Een bewuste `exit 1` (afgebroken sync) vuurt de ERR-trap niet: zet
+  # maintenance mode dan alsnog uit. Behalve als herstel van de database
+  # mislukte (_KEEP_MAINT), want dan is de site kapot.
+  _KEEP_MAINT=false
+  trap '
+    if [[ "$_MAINT_ACTIVE" == true && "$_KEEP_MAINT" != true ]]; then
+      warning "Maintenance mode deactiveren na afgebroken sync..."
+      wp_to_cmd maintenance-mode deactivate --skip-plugins --skip-themes 2>/dev/null || true
+    fi
+  ' EXIT
 
   # Make sure both environments are available before we continue
   step "Verbinding controleren ($FROM → $TO)..."

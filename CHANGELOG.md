@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] - 2026-11-02
+
+### Fixed
+- **PHP-meldingen van WP-CLI vervuilen de db-sync niet meer bij een phar-installatie.** `WP_CLI_PHP_ARGS` werkt alleen via de bash-launcher van WP-CLI (Composer `vendor/bin/wp`). De Homebrew-`wp` en `wp-cli.phar` starten via `#!/usr/bin/env php` en negeerden de flags. Op PHP 8.5 kwam zo een `Deprecated: Case statements followed by a semicolon`-regel (uit `react/promise` in WP-CLI 2.12) bovenaan elke `db export -`. Gevolg: de import faalde na een geslaagde `db reset`, waardoor het doel leeg achterbleef. Ook de lokale backup was ongeldig. Is `wp` een phar, dan start het script hem nu zelf als `php $WP_CLI_PHP_ARGS <wp>`.
+- **Maintenance mode gaat uit na een afgebroken sync.** Een bewuste `exit 1` vuurde de ERR-trap niet, waardoor het doel in maintenance mode bleef staan. Een EXIT-trap zet hem nu uit, behalve als het herstel van de database mislukte.
+- De herstelhint gebruikte `wp @<env> db import <lokaal pad>`, en dat pad bestaat niet op de server. Het script gebruikt nu de remote backup of `db import - < <lokaal pad>`.
+
+### Changed
+- **Database-sync exporteert eerst naar een bestand en controleert dat, pas daarna wordt het doel gereset.** Een dump moet beginnen met de mysqldump/mariadb-dump-header en eindigen met `-- Dump completed`. Is de export ongeldig (een PHP-melding in de stream, een afgebroken verbinding), dan stopt de sync en blijft het doel ongemoeid. Het bestand blijft dan in `backups/` staan voor inspectie.
+- De lokale backup van het doel krijgt dezelfde controle: is hij ongeldig, dan stopt de sync voordat er iets is aangeraakt.
+- **Mislukt de import, dan zet het script het doel automatisch terug** naar de backup van vóór de sync (op staging/productie de remote backup die al op de server staat), en zet maintenance mode daarna uit. Mislukt ook het herstel, dan blijft maintenance mode aan en volgen de juiste handmatige commando's.
+- De misleidende tip "update WP-CLI" bij een mislukte sync is weg: 2.12 is de nieuwste stabiele versie en loste dit niet op.
+
 ## [2.2.1] - 2026-10-28
 
 ### Fixed
