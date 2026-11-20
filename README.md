@@ -99,6 +99,13 @@ Definieer de te togglen packages in je project-`composer.json`:
 
 ## Pre-commit guard
 
+De guard (`mintis guard pre-commit`, geïnstalleerd door `mintis setup`) blokkeert een commit als die bevat:
+- `wp-cli.yml` met een serverhost (`ssh: user@host`): die hoort in `wp-cli.local.yml`;
+- paden onder `node_modules/` of `backups/`, of een `.sql`-dump: build-afval en databasedumps blijven anders voorgoed in de git-historie (op servers groeide `.git` zo tot 300 MB per site). Alleen paden, geen groottes; `.gitignore` is de fix;
+- in dev-mode: `composer.json`/`composer.lock` met een lokaal pad.
+
+Noodgeval: `git commit --no-verify`.
+
 In dev-mode wijst de repository naar een lokaal path. Commit je dan `composer.json`/`composer.lock`, dan breekt de deploy (de server kan niet symlinken naar `../<package>`). De guard blokkeert dat:
 
 ```bash

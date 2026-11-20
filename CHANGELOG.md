@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.0] - 2026-11-20
+
+### Added
+- **`mintis guard pre-commit` blocks `node_modules/`, `backups/` and `*.sql` dumps.** On two servers the `.git` of a site had grown to 270-320 MB because the history contained `node_modules` (a 73 MB node-sass binary), two database dumps from `backups/` and a wp-sync-db dump; that travels with every clone and cannot be removed without rewriting history. The guard checks the staged paths only (no size checks) and names the files; `.gitignore` is the fix, `git commit --no-verify` the escape hatch. Runs before the dev-mode check, so it also works outside dev-mode and in GitHub Desktop.
+
 ## [2.4.0] - 2026-11-20
 
 ### Changed

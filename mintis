@@ -263,6 +263,28 @@ function cmdGuard(string $root): void
         }
     }
 
+    // Build-afval en databasedumps horen niet in git. Op de servers bleek de
+    // .git van twee sites 270-320 MB, met in de historie node_modules (een
+    // node-sass binary van 73 MB), twee dumps uit backups/ en een wp-sync-db
+    // dump; dat reist met elke kloon mee en is nooit meer weg te krijgen zonder
+    // de historie te herschrijven. Checkt de gestagede paden, geen groottes.
+    $gestaagd = shell_exec('git diff --cached --name-only --diff-filter=d 2>/dev/null');
+    $gestaagd = is_string($gestaagd) ? array_filter(array_map('trim', explode("\n", $gestaagd))) : [];
+    $afval = array_values(array_filter($gestaagd, static fn (string $p): bool =>
+        preg_match('#(^|/)node_modules/#', $p) === 1
+        || preg_match('#(^|/)backups/#', $p) === 1
+        || preg_match('#\.sql(\.gz)?$#i', $p) === 1));
+    if ($afval) {
+        $R = "\033[0;31m"; $Y = "\033[0;33m"; $N = "\033[0m";
+        fwrite(STDERR, "\n{$R}❌ Commit geblokkeerd: node_modules, backups/ of een .sql-dump staat in de commit.{$N}\n");
+        foreach (array_slice($afval, 0, 8) as $f) fwrite(STDERR, "     - {$f}\n");
+        if (count($afval) > 8) fwrite(STDERR, '     … en ' . (count($afval) - 8) . " meer\n");
+        fwrite(STDERR, "   Dat is build-afval of een databasedump: het hoort niet in git en blijft anders voorgoed in de historie.\n");
+        fwrite(STDERR, "   Herstel: {$Y}git restore --staged <pad>{$N} en zet het pad in {$Y}.gitignore{$N} (node_modules/, backups/, *.sql).\n");
+        fwrite(STDERR, "   Noodgeval: {$Y}git commit --no-verify{$N}\n\n");
+        exit(1);
+    }
+
     // Geen dev-mode actief → niets te bewaken.
     if (!file_exists($root . '/' . MARKER)) exit(0);
 
