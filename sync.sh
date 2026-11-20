@@ -61,9 +61,19 @@ ${BOLD}AVAILABLE SYNC DIRECTIONS${NORMAL}
 ${BOLD}OPTIONS${NORMAL}
   --skip-db         Skip database sync (only sync uploads)
   --skip-assets     Skip uploads sync (only sync database)
+  --with-assets     Copy uploads to staging too (staging skips them by default,
+                    see STAGING below)
   --dry-run         Preview changes without executing
   --local           Use local rsync (no remote copy)
   --help, -h        Show this help message
+
+${BOLD}STAGING${NORMAL}
+  A sync ${BOLD}to staging${NORMAL} copies the database only. Staging keeps no copy of the
+  production uploads: a missing file under /app/uploads/ is answered by nginx
+  on staging with a 302 to the same path on production (one-time nginx block in
+  Ploi, see mintis-26 → docs/project/environments.md → "Staging zonder eigen
+  uploads"). Use --with-assets to copy the uploads anyway, e.g. to test image
+  sizes on staging. --skip-db (uploads only) also copies them.
 
 ${BOLD}EXAMPLES${NORMAL}
   # Pull production database and uploads to local
@@ -78,8 +88,11 @@ ${BOLD}EXAMPLES${NORMAL}
   # Preview what would happen
   composer sync staging development -- --dry-run
 
-  # Sync production to staging (e.g., after hotfix)
+  # Sync production to staging (database only; uploads come from production via nginx)
   composer sync production staging
+
+  # Same, but copy the uploads to staging as well
+  composer sync production staging -- --with-assets
 
 ${BOLD}COMPOSER SHORTCUTS${NORMAL}
   composer sync:production-development
@@ -525,6 +538,7 @@ PRODDIR="${SERVER_USER}@${SERVER_IP}:${SERVER_BASE_PATH}/${PROD_DOMAIN}${UPLOADS
 LOCAL=false
 SKIP_DB=false
 SKIP_ASSETS=false
+WITH_ASSETS=false
 DRY_RUN=false
 COMMAND_ONLY=false
 POSITIONAL_ARGS=()
@@ -543,6 +557,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-assets)
       SKIP_ASSETS=true
+      shift
+      ;;
+    --with-assets)
+      WITH_ASSETS=true
       shift
       ;;
     --local)
@@ -585,8 +603,20 @@ case "$1-$2" in
   development-staging)    DIR="up ⬆️ "            FROMSITE=$DEVSITE;  FROMDIR=$DEVDIR;  TOSITE=$STAGSITE; TODIR=$STAGDIR; ;;
   production-staging)     DIR="horizontally ↔️ ";  FROMSITE=$PRODSITE; FROMDIR=$PRODDIR; TOSITE=$STAGSITE; TODIR=$STAGDIR; ;;
   staging-production)     DIR="horizontally ↔️ ";  FROMSITE=$STAGSITE; FROMDIR=$STAGDIR; TOSITE=$PRODSITE; TODIR=$PRODDIR; ;;
-  *) echo "usage: $0 [[--skip-db] [--skip-assets] [--local] [--dry-run] [--command-only]] production development | staging development | development staging | development production | staging production | production staging" && exit 1 ;;
+  *) echo "usage: $0 [[--skip-db] [--skip-assets] [--with-assets] [--local] [--dry-run] [--command-only]] production development | staging development | development staging | development production | staging production | production staging" && exit 1 ;;
 esac
+
+# Staging houdt geen eigen kopie van de uploads (sinds 2.4.0, 19-11-2026): een
+# ontbrekend bestand onder /app/uploads/ stuurt nginx op staging met een 302 naar
+# hetzelfde pad op productie (eenmalig nginx-blok in Ploi; mintis-26 →
+# docs/project/environments.md → "Staging zonder eigen uploads"). De sync kopieert
+# ze daarom standaard niet naar staging. Wel kopiëren: --with-assets, of --skip-db
+# (dat betekent "alleen uploads", dus die wil je dan juist).
+ASSETS_SKIPPED_FOR_STAGING=false
+if [[ "$TO" == "staging" && "$WITH_ASSETS" == false && "$SKIP_DB" == false && "$SKIP_ASSETS" == false ]]; then
+  SKIP_ASSETS=true
+  ASSETS_SKIPPED_FOR_STAGING=true
+fi
 
 # Plugin management arrays voor de doelomgeving (geladen vanuit .sync config)
 _PM_ENV=$(echo "$TO" | tr '[:lower:]' '[:upper:]')
@@ -603,6 +633,9 @@ fi
 if [ "$SKIP_ASSETS" = false ]
 then
   ASSETS_MESSAGE=" - sync assets ${BOLD}$DIR${NORMAL} from $FROM ($FROMSITE) to $TO ($TOSITE)?"
+elif [ "$ASSETS_SKIPPED_FOR_STAGING" = true ]
+then
+  ASSETS_MESSAGE=" - ${BOLD}not${NORMAL} copy uploads to staging (missing files are served from production via nginx; add --with-assets to copy them)"
 fi
 
 if [ "$SKIP_DB" = true ] && [ "$SKIP_ASSETS" = true ]
@@ -643,6 +676,10 @@ if [[ "$COMMAND_ONLY" == true ]]; then
     else
       echo "    rsync -az --progress \"${FROMDIR}\" \"${TODIR}\""
     fi
+    echo
+  elif [[ "$ASSETS_SKIPPED_FOR_STAGING" == true ]]; then
+    echo "  ${BOLD}[Assets Sync]${NORMAL}"
+    echo "    (overgeslagen: staging haalt ontbrekende uploads via nginx van productie; --with-assets kopieert ze wél)"
     echo
   fi
   if [[ ${#_PM_ACTIVATE[@]} -gt 0 || ${#_PM_DEACTIVATE[@]} -gt 0 ]]; then
@@ -719,6 +756,7 @@ if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
     info "Dry-run mode — no changes will be made"
     echo
     [[ "$SKIP_DB" == false ]] && echo "  Database: $FROM → $TO (search-replace $FROMSITE → $TOSITE)"
+    [[ "$ASSETS_SKIPPED_FOR_STAGING" == true ]] && echo "  Assets: overgeslagen (staging haalt ontbrekende uploads via nginx van productie; --with-assets kopieert ze wél)"
     if [[ "$SKIP_ASSETS" == false ]]; then
       echo "  Assets: $FROMDIR → $TODIR"
       echo

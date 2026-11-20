@@ -133,11 +133,15 @@ mintis sync staging production
 ```bash
 mintis sync production development --skip-db        # Alleen uploads
 mintis sync production development --skip-assets    # Alleen database
+mintis sync production staging --with-assets        # Ook de uploads naar staging (standaard niet, zie hieronder)
 mintis sync production development --dry-run        # Preview, geen wijzigingen
 mintis sync production development --command-only   # Toon commando's, doe niets
 ```
 
 > Als composer-script aliased (mintis-26): `composer sync production development -- --dry-run`.
+
+### Staging zonder eigen uploads
+Een sync **naar staging** kopieert sinds 2.4.0 alleen de database. Staging houdt geen kopie van de productie-uploads: een ontbrekend bestand onder `/app/uploads/` krijgt op staging van nginx een 302 naar hetzelfde pad op productie (eenmalig nginx-blok in Ploi; zie mintis-26 → `docs/project/environments.md` → "Staging zonder eigen uploads"). Wil je de uploads toch op staging, bijvoorbeeld om afbeeldingsmaten te testen: `--with-assets`. `--skip-db` (alleen uploads) kopieert ze ook. Syncs naar development en production zijn ongewijzigd.
 
 ### `wp-cli.yml` en `wp-cli.local.yml`
 - **`wp-cli.yml`** — getrackt in git, **zonder** serverhosts: `path: web/wp` (de deploy op de server heeft het nodig) en `@development`. Wordt alleen aangemaakt als hij ontbreekt en nooit herschreven.

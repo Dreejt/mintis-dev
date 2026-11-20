@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.0] - 2026-11-20
+
+### Changed
+- **A sync to staging no longer copies the uploads.** Staging keeps no copy of the production uploads: a one-time nginx block in Ploi answers a missing file under `/app/uploads/` on staging with a 302 to the same path on production (mintis-26 → `docs/project/environments.md` → "Staging zonder eigen uploads"). Every staging held a full copy of the production media (up to 2.2 GB per site), which filled the disks of several servers. `mintis sync production staging` and `development staging` now sync the database only; the confirmation prompt, `--dry-run` and `--command-only` say so. New flag `--with-assets` copies the uploads anyway (for example to test image sizes on staging); `--skip-db` ("uploads only") still copies them too. Syncs to development and production are unchanged.
+
 ## [2.3.0] - 2026-11-02
 
 ### Fixed
